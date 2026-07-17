@@ -614,6 +614,75 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_lookup_without_date_range(
+    client, monkeypatch
+):
+    request_id = "req-deep-link"
+    mock_spend_logs = [
+        {
+            "id": "log-deep-link",
+            "request_id": request_id,
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": "2020-01-01T00:00:00+00:00",
+            "model": "gpt-4",
+        }
+    ]
+
+    def filter_by_request_id(where):
+        return [
+            log
+            for log in mock_spend_logs
+            if log["request_id"] == where.get("request_id")
+        ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_request_id),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={"request_id": request_id},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["data"][0]["request_id"] == request_id
+    assert data["data"][0]["startTime"].startswith("2020-01-01")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        ("/spend/logs/ui", {}),
+        ("/spend/logs/v2", {"request_id": "req-deep-link"}),
+    ],
+)
+async def test_ui_view_spend_logs_requires_dates_outside_ui_request_id_lookup(
+    client, monkeypatch, path, params
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda where: []),
+    )
+
+    response = client.get(
+        path,
+        params=params,
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 400
+    assert "Start date and end date are required" in response.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "session_id_query,expected_request_ids",
     [

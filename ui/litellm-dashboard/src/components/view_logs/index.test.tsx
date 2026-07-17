@@ -13,7 +13,13 @@ vi.mock("./log_filter_logic", async (importOriginal) => {
   return {
     ...actual,
     useLogFilterLogic: vi.fn(() => ({
-      logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
+      logsQuery: {
+        isLoading: false,
+        isFetching: false,
+        isFetched: false,
+        isPlaceholderData: false,
+        refetch: vi.fn(),
+      },
       filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
       allTeams: [],
       handleFilterChange: vi.fn(),
@@ -21,6 +27,11 @@ vi.mock("./log_filter_logic", async (importOriginal) => {
     })),
   };
 });
+
+vi.mock("./LogDetailsDrawer", () => ({
+  LogDetailsDrawer: ({ open, logEntry }: { open: boolean; logEntry: { request_id: string } | null }) =>
+    open && logEntry ? <div data-testid="log-details-drawer">{logEntry.request_id}</div> : null,
+}));
 
 vi.mock("../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../networking")>();
@@ -116,6 +127,78 @@ describe("SpendLogsTable", () => {
 
       expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+    });
+  });
+
+  describe("request ID deep links", () => {
+    it("opens the matching request in the details drawer", async () => {
+      const linkedLog = {
+        request_id: "req-deep-link",
+        api_key: "sk-test",
+        team_id: "team-1",
+        model: "gpt-4",
+        model_id: "model-1",
+        call_type: "acompletion",
+        spend: 0,
+        total_tokens: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        startTime: "2020-01-01T00:00:00Z",
+        endTime: "2020-01-01T00:00:01Z",
+        cache_hit: "false",
+        messages: {},
+        response: {},
+      };
+      vi.mocked(useLogFilterLogic).mockImplementationOnce(
+        () =>
+          ({
+            logsQuery: {
+              isLoading: false,
+              isFetching: false,
+              isFetched: true,
+              isPlaceholderData: false,
+              refetch: vi.fn(),
+            },
+            filteredLogs: { data: [linkedLog], total: 1, page: 1, page_size: 50, total_pages: 1 },
+            allTeams: [],
+            handleFilterChange: vi.fn(),
+            handleFilterReset: mockHandleFilterResetFromHook,
+          }) as ReturnType<typeof useLogFilterLogic>,
+      );
+
+      renderWithProviders(<SpendLogsTable {...defaultProps} requestId="req-deep-link" />);
+
+      expect(await screen.findByTestId("log-details-drawer")).toHaveTextContent("req-deep-link");
+      expect(useLogFilterLogic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          exactRequestId: "req-deep-link",
+          filters: expect.objectContaining({ "Request ID": "req-deep-link" }),
+        }),
+      );
+    });
+
+    it("shows a not-found state after an exact lookup completes", () => {
+      vi.mocked(useLogFilterLogic).mockImplementationOnce(
+        () =>
+          ({
+            logsQuery: {
+              isLoading: false,
+              isFetching: false,
+              isFetched: true,
+              isPlaceholderData: false,
+              refetch: vi.fn(),
+            },
+            filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+            allTeams: [],
+            handleFilterChange: vi.fn(),
+            handleFilterReset: mockHandleFilterResetFromHook,
+          }) as ReturnType<typeof useLogFilterLogic>,
+      );
+
+      renderWithProviders(<SpendLogsTable {...defaultProps} requestId="req-missing" />);
+
+      expect(screen.getByText("Request log not found")).toBeInTheDocument();
+      expect(screen.getByText(/req-missing/)).toBeInTheDocument();
     });
   });
 

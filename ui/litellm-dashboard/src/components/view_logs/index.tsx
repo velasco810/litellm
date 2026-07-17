@@ -1,6 +1,7 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Alert } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
@@ -12,7 +13,7 @@ import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import { useLogFilterLogic, defaultFilters, FILTER_KEYS, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
@@ -24,9 +25,17 @@ interface SpendLogsTableProps {
   userRole: string | null;
   userID: string | null;
   premiumUser: boolean;
+  requestId?: string;
 }
 
-export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
+export default function SpendLogsTable({
+  accessToken,
+  token,
+  userRole,
+  userID,
+  premiumUser,
+  requestId,
+}: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
@@ -36,15 +45,19 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
 
   const [isCustomDate, setIsCustomDate] = useState(false);
-  const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+  const [filters, setFilters] = useState<LogFilterState>(() => ({
+    ...defaultFilters,
+    [FILTER_KEYS.REQUEST_ID]: requestId ?? "",
+  }));
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
-  const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
+  const filterByCurrentUser = Boolean(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
 
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [dismissedDeepLinkRequestId, setDismissedDeepLinkRequestId] = useState<string | null>(null);
 
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -53,6 +66,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     value: 24,
     unit: "hours",
   });
+  const isRequestIdDeepLinkActive = Boolean(requestId && filters[FILTER_KEYS.REQUEST_ID] === requestId);
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
     const storedValue = sessionStorage.getItem("isLiveTail");
@@ -80,12 +94,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     fetchKeyInfo();
   }, [selectedKeyIdInfoView, accessToken]);
 
-  useEffect(() => {
-    if (userRole && internalUserRoles.includes(userRole)) {
-      setFilterByCurrentUser(true);
-    }
-  }, [userRole]);
-
   const {
     logsQuery,
     filteredLogs,
@@ -99,7 +107,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     userID,
     filters,
     setFilters,
-    filterByCurrentUser: !!filterByCurrentUser,
+    filterByCurrentUser,
     activeTab,
     isLiveTail,
     startTime,
@@ -110,7 +118,18 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     sortBy,
     sortOrder,
     currentPage,
+    exactRequestId: isRequestIdDeepLinkActive ? requestId : undefined,
   });
+
+  const requestIdLookupComplete = Boolean(
+    isRequestIdDeepLinkActive && logsQuery.isFetched && !logsQuery.isFetching && !logsQuery.isPlaceholderData,
+  );
+  const deepLinkedLog = requestIdLookupComplete
+    ? filteredLogs.data.find((log) => log.request_id === requestId)
+    : undefined;
+  const visibleDeepLinkedLog = deepLinkedLog && dismissedDeepLinkRequestId !== requestId ? deepLinkedLog : undefined;
+  const drawerLog = selectedLog ?? visibleDeepLinkedLog ?? null;
+  const drawerOpen = isDrawerOpen || visibleDeepLinkedLog !== undefined;
 
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
@@ -261,7 +280,17 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   options={getLogFilterOptions(accessToken)}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                  initialValues={filters}
                 />
+                {requestIdLookupComplete && !deepLinkedLog ? (
+                  <Alert
+                    className="mb-4"
+                    type="warning"
+                    showIcon
+                    message="Request log not found"
+                    description={`No retained request log is available for ${requestId}.`}
+                  />
+                ) : null}
                 <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
                     searchTerm={searchTerm}
@@ -316,17 +345,22 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
       {/* Log Details Drawer */}
       <LogDetailsDrawer
-        open={isDrawerOpen}
+        open={drawerOpen}
         onClose={() => {
+          if (visibleDeepLinkedLog) setDismissedDeepLinkRequestId(requestId ?? null);
           setIsDrawerOpen(false);
           setSelectedSessionId(null);
         }}
-        logEntry={selectedLog}
+        logEntry={drawerLog}
         sessionId={selectedSessionId}
         accessToken={accessToken}
         allLogs={filteredData}
         onSelectLog={setSelectedLog}
-        startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
+        startTime={
+          isRequestIdDeepLinkActive && drawerLog?.startTime
+            ? moment(drawerLog.startTime).utc().format("YYYY-MM-DD HH:mm:ss")
+            : moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        }
       />
     </div>
   );

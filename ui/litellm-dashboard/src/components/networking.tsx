@@ -1965,8 +1965,8 @@ interface UiSpendLogsParams {
 
 interface UiSpendLogsCallOptions {
   accessToken: string;
-  start_date: string;
-  end_date: string;
+  start_date?: string;
+  end_date?: string;
   page?: number;
   page_size?: number;
   params?: UiSpendLogsParams;
@@ -1985,8 +1985,8 @@ export const uiSpendLogsCall = async ({
     let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/ui` : `/spend/logs/ui`;
 
     const queryParams = new URLSearchParams();
-    queryParams.append("start_date", start_date);
-    queryParams.append("end_date", end_date);
+    if (start_date) queryParams.append("start_date", start_date);
+    if (end_date) queryParams.append("end_date", end_date);
     queryParams.append("page", page.toString());
     queryParams.append("page_size", page_size.toString());
 

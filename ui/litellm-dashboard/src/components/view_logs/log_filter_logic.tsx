@@ -86,6 +86,7 @@ export function useLogFilterLogic({
   sortBy = "startTime",
   sortOrder = "desc",
   currentPage = 1,
+  exactRequestId,
 }: {
   accessToken: string | null;
   token: string | null;
@@ -104,6 +105,7 @@ export function useLogFilterLogic({
   sortBy?: LogsSortField;
   sortOrder?: "asc" | "desc";
   currentPage?: number;
+  exactRequestId?: string;
 }) {
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
   const debouncer = useDebouncer(setDebouncedFilters, { wait: DEBOUNCE_WAIT_MS });
@@ -119,6 +121,7 @@ export function useLogFilterLogic({
     }
     return merged;
   }, [filters, debouncedFilters]);
+  const isExactRequestLookup = Boolean(exactRequestId && effectiveFilters[FILTER_KEYS.REQUEST_ID] === exactRequestId);
 
   const logsQuery = useQuery<PaginatedResponse>({
     queryKey: [
@@ -133,6 +136,7 @@ export function useLogFilterLogic({
       filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
+      isExactRequestLookup,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -152,8 +156,8 @@ export function useLogFilterLogic({
 
       const response = await uiSpendLogsCall({
         accessToken,
-        start_date: formattedStartTime,
-        end_date: formattedEndTime,
+        start_date: isExactRequestLookup ? undefined : formattedStartTime,
+        end_date: isExactRequestLookup ? undefined : formattedEndTime,
         page: currentPage,
         page_size: pageSize,
         params: {
@@ -177,7 +181,7 @@ export function useLogFilterLogic({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: getLiveTailRefetchInterval(isLiveTail, currentPage),
+    refetchInterval: isExactRequestLookup ? false : getLiveTailRefetchInterval(isLiveTail, currentPage),
     placeholderData: keepPreviousData,
     // Only live-tail-poll while the tab is visible.
     refetchIntervalInBackground: false,

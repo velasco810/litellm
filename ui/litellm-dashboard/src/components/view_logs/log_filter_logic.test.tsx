@@ -281,6 +281,53 @@ describe("useLogFilterLogic", () => {
         { timeout: 500 },
       );
     });
+
+    it("omits the date range for an exact request ID deep link", async () => {
+      const requestId = "req-deep-link";
+      const { result } = renderFilterHook({ exactRequestId: requestId });
+
+      act(() => {
+        result.current.handleFilterChange({ "Request ID": requestId });
+      });
+
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              start_date: undefined,
+              end_date: undefined,
+              params: expect.objectContaining({ request_id: requestId }),
+            }),
+          );
+        },
+        { timeout: 500 },
+      );
+    });
+
+    it("keeps the date range for a request ID that does not match the deep link", async () => {
+      const { result } = renderFilterHook({
+        exactRequestId: "req-deep-link",
+        startTime: "2025-01-01T00:00:00Z",
+        endTime: "2025-01-01T23:59:59Z",
+      });
+
+      act(() => {
+        result.current.handleFilterChange({ "Request ID": "req-manual-filter" });
+      });
+
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              start_date: "2025-01-01 00:00:00",
+              end_date: "2025-01-01 23:59:59",
+              params: expect.objectContaining({ request_id: "req-manual-filter" }),
+            }),
+          );
+        },
+        { timeout: 500 },
+      );
+    });
   });
 
   describe("debounce", () => {

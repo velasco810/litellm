@@ -1695,7 +1695,13 @@ async def ui_view_spend_logs(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    if start_date is None or end_date is None:
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    is_v2 = "/spend/logs/v2" in get_request_route(request)
+    is_request_id_lookup = not is_v2 and request_id is not None and bool(request_id.strip())
+    has_partial_date_range = (start_date is None) != (end_date is None)
+    if has_partial_date_range or ((start_date is None or end_date is None) and not is_request_id_lookup):
         raise ProxyException(
             message="Start date and end date are required",
             type="bad_request",
@@ -1729,10 +1735,6 @@ async def ui_view_spend_logs(
         )
 
     try:
-        # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
-
-        is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
@@ -1748,17 +1750,19 @@ async def ui_view_spend_logs(
                 detail=f"Invalid date format: {date_str}. Expected: {expected}",
             )
 
-        start_date_obj = parse_date(start_date)
-        end_date_obj = parse_date(end_date)
-
-        # Convert to ISO format strings for Prisma
-        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
-        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
-
-        # Build where conditions
-        where_conditions: dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-        }
+        date_range = (
+            (parse_date(start_date), parse_date(end_date)) if start_date is not None and end_date is not None else None
+        )
+        where_conditions: dict[str, Any] = (
+            {
+                "startTime": {
+                    "gte": date_range[0].isoformat(),
+                    "lte": date_range[1].isoformat(),
+                }
+            }
+            if date_range is not None
+            else {}
+        )
 
         if team_id is not None:
             where_conditions["team_id"] = team_id
@@ -1871,19 +1875,16 @@ async def ui_view_spend_logs(
         # Build raw SQL to fetch paginated data WITHOUT heavy columns
         # (messages, response, proxy_server_request can be hundreds of KB per row).
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
-        sql_conditions: List[str] = []
-        sql_params: List[Any] = []
-        p = 1  # parameter index counter
-
-        # Date range (always present). Wrap the param side with
-        # `AT TIME ZONE 'UTC'` so comparison against the plain `timestamp`
-        # column does not depend on the DB session timezone (see #22529).
-        sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
-        sql_params.append(start_date_obj)
-        p += 1
-        sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
-        sql_params.append(end_date_obj)
-        p += 1
+        sql_conditions: List[str] = (
+            [
+                "\"startTime\" >= ($1::timestamptz AT TIME ZONE 'UTC')",
+                "\"startTime\" <= ($2::timestamptz AT TIME ZONE 'UTC')",
+            ]
+            if date_range is not None
+            else []
+        )
+        sql_params: List[Any] = list(date_range) if date_range is not None else []
+        p = len(sql_params) + 1
 
         # Equality filters - read effective values from where_conditions (post-authorization)
         for sql_col, wc_key in [
